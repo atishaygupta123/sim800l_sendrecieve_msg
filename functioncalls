@@ -1,0 +1,166 @@
+#define TINY_GSM_MODEM_SIM800     
+#include <Wire.h>
+#include <TinyGsmClient.h>
+unsigned long previousMillis =0;
+const unsigned long interval=300000; //5 mins
+
+
+// TTGO T-Call pins
+#define MODEM_RST            5
+#define MODEM_PWKEY          4
+#define MODEM_POWER_ON       23
+#define MODEM_TX             27
+#define MODEM_RX             26
+#define I2C_SDA              21
+#define I2C_SCL              22
+
+// Set serial for debug console (to Serial Monitor, default speed 115200)
+#define SerialMon Serial
+// Set serial for AT commands (to SIM800 module)
+#define SerialAT  Serial1
+
+// Define the serial console for debug prints, if needed
+#ifdef DUMP_AT_COMMANDS
+#include <StreamDebugger.h>
+  StreamDebugger debugger(SerialAT, SerialMon);
+  TinyGsm modem(debugger);
+#else
+  TinyGsm modem(SerialAT);
+#endif
+
+#define IP5306_ADDR          0x75
+#define IP5306_REG_SYS_CTL0  0x00
+
+
+bool setPowerBoostKeepOn(int en) {
+  Wire.beginTransmission(IP5306_ADDR);
+  Wire.write(IP5306_REG_SYS_CTL0);
+  if (en) {
+    Wire.write(0x37); // Set bit1: 1 enable 0 disable boost keep on
+  } else {
+    Wire.write(0x35); // 0x37 is default reg value
+  }
+  return Wire.endTransmission() == 0;
+}
+
+
+void setup() {
+  Serial.begin(115200);
+  // Keep power when running from battery
+  Wire.begin(I2C_SDA, I2C_SCL);
+  bool isOk = setPowerBoostKeepOn(1);
+  Serial.println(String("IP5306 KeepOn ") + (isOk ? "OK" : "FAIL"));
+
+  // Set modem reset, enable, power pins
+  pinMode(MODEM_PWKEY, OUTPUT);
+  pinMode(MODEM_RST, OUTPUT);
+  pinMode(MODEM_POWER_ON, OUTPUT);
+  digitalWrite(MODEM_PWKEY, LOW);
+  digitalWrite(MODEM_RST, HIGH);
+  digitalWrite(MODEM_POWER_ON, HIGH);
+
+  // Set GSM module baud rate and UART pins
+  SerialAT.begin(115200, SERIAL_8N1, MODEM_RX, MODEM_TX);
+  delay(3000);
+
+  Serial.println("Initializing modem...");
+  modem.restart();
+  delay(10000);
+  SerialAT.println("AT+CMGF=1"); // Configuring TEXT mode
+  delay(1000);
+  mainf();
+}
+
+void loop() {
+}
+
+void mainf(){
+  // Read SMS
+  char testarray[40];
+  memset(testarray, '\0', sizeof(testarray));
+
+  uint8_t readResult = readSMS(testarray);
+
+  Serial.println("char arr is as follows: ");
+  for(int i=0;i<40;i++){
+    Serial.println(testarray[i]);
+  }
+
+  switch(readResult)
+  {
+    case 0:
+      Serial.println("0 called");
+      break;
+    case 1:
+      Serial.println("1 called");
+      break;
+    case 2:
+      Serial.println("2 called");
+      break;
+    case 3:
+      Serial.println("3 called");
+      break;
+  }
+  deletemessage();
+}
+
+int readSMS(char arr[])
+{
+  Serial.println("Process Started");
+  // Read the SMS with the extracted index using AT commands
+  SerialAT.print("AT+CMGR=");
+  SerialAT.println("1");
+  delay(5000); // Allow time for response
+
+  // Process the SMS message
+  if (SerialAT.find("+CMGR:")) 
+  {
+        String receivedMessage = SerialAT.readStringUntil('O');
+        receivedMessage.trim();
+        
+        const char* st=receivedMessage.c_str();
+        int s=strlen(st);
+        char arr[s+1];
+        strcpy(arr,st);
+
+        int count=0;
+        int i=0;
+        for(;i<s;i++){
+          if(arr[i]=='"'){
+            count++;
+          }
+          if(count==8){
+            break;
+          }
+        }
+
+      String f="";
+      for(int j=i+3;j<s;j++){
+        f+=arr[j];
+      }
+
+      Serial.println("Recieved Message: "+f);
+      if(f=="xyz"){
+        const char* m=f.c_str();
+        strcpy(arr,m);
+        return 1;
+      }
+      if(f=="mno"){
+        const char* m=f.c_str();
+        strcpy(arr,m);
+        return 2;
+      }
+      if(f=="pyq"){
+        const char* m=f.c_str();
+        strcpy(arr,m);
+        return 3;
+      }
+  } 
+  return 0;
+}
+
+void deletemessage(){
+  delay(1000);
+  SerialAT.println("AT+CMGDA=\"DEL ALL\"");
+  Serial.println("Memory freed...");
+}
